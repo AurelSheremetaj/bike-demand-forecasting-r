@@ -1,0 +1,974 @@
+---
+title: "Bike Sharing Forecasting Project"
+author: " Aurel Sheremetaj"
+output:
+  html_document:
+    theme: cosmo
+    toc: true
+    toc_float: true
+    code_folding: hide
+    number_sections: true
+    highlight: tango
+---
+
+# Dataset
+
+The dataset used in this analysis contains hourly records of bike rental activity. It includes information about time, seasonality, and external conditions such as weather.
+Each observation represents the number of bike rentals for a specific hour, along with related contextual variables.
+
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(readxl)
+
+data <- read_excel("~/Downloads/hour.xlsx")
+head(data)
+
+data$datetime <- ymd(data$dteday) + hours(data$hr)
+data$count <- data$cnt
+
+```
+
+
+## Plot
+
+```{r}
+ggplot(data, aes(x = datetime, y = count)) +
+  geom_line(color = "steelblue") +
+  labs(
+    title = "Bike Rentals Over Time",
+    x = "Time",
+    y = "Number of Rentals"
+  )
+```
+
+The plot shows the evolution of bike rentals over time at an hourly level. There is a clear increasing trend from 2011 to 2012, indicating growing usage of the bike-sharing system.
+
+Strong fluctuations are visible within short time intervals, reflecting daily patterns in demand. Additionally, seasonal effects can be observed, with higher rental activity during warmer periods and lower activity during colder months.
+
+These patterns suggest the presence of both trend and seasonality in the data, which are important components to consider when building forecasting models.
+
+
+## Data structure
+
+```{r}
+str(data)
+nrow(data)
+ncol(data)
+```
+
+The dataset consists of 17,379 observations and 22 variables, with each row corresponding to an hourly measurement of bike rental activity.
+
+It includes a combination of temporal variables (date, hour, weekday, month), environmental factors (temperature, humidity, windspeed, and weather conditions), and usage-related variables (casual, registered, and total rentals).
+
+For the purposes of this analysis, the main variable of interest is **count**, representing the total number of bike rentals per hour.
+
+
+## Summary Statistics
+
+```{r}
+summary(data)
+```
+The summary statistics provide an overview of the distribution of key variables in the dataset.
+
+The target variable, **count**, has an average value of approximately 189 rentals per hour, with a minimum of 1 and a maximum of 977, indicating high variability in demand.
+
+The hourly variable (**hr**) ranges from 0 to 23, confirming full daily coverage. Weather-related variables such as temperature, humidity, and windspeed show moderate variation, suggesting changing environmental conditions over time.
+
+Additionally, the dataset is well balanced across days of the week and months, ensuring that no particular period is overrepresented.
+
+Overall, the data exhibits significant variability and patterns, which supports the need for time series modeling.
+
+
+## Missing Values Check
+```{r}
+colSums(is.na(data))
+```
+A check for missing values was performed across all variables in the dataset. The results show that there are no missing values present.
+
+This indicates that the dataset is complete and does not require additional preprocessing for handling missing data.
+
+---
+
+# Exploratory Data Analysis (EDA)
+
+This section presents an exploratory data analysis (EDA) of the dataset. The objective is to understand the underlying structure, identify trends and seasonal patterns, and explore the variability in bike rental demand.
+
+Through visualizations and descriptive statistics, this analysis provides key insights that will guide the selection and development of appropriate time series forecasting models.
+
+## Distribution of Bike Rentals
+```{r}
+ggplot(data, aes(count)) +
+  geom_histogram(bins = 50, fill = "darkblue", color = "white") +
+  labs(
+    title = "Distribution of Hourly Bike Rentals",
+    x = "Number of Rentals",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+```
+The histogram shows the distribution of hourly bike rentals. The data is highly right-skewed, with a large number of observations concentrated at lower rental values and fewer observations at higher values.
+
+This indicates that low to moderate demand occurs more frequently, while very high rental counts are relatively rare. The long tail on the right suggests the presence of peak demand periods.
+
+Overall, the distribution is not symmetric, which suggests that transformations or models that can handle non-normal data may be appropriate for forecasting.
+
+## Time features
+
+In this section, we explore how bike rental demand varies over time. 
+Understanding temporal patterns such as hourly usage helps identify peak demand periods and user behavior, which is essential for improving forecasting models and making practical business decisions.
+
+### Rental by hour
+
+```{r}
+ggplot(data, aes(x = hr, y = count)) +
+  stat_summary(fun = mean, geom = "line", color = "blue") +
+  labs(title = "Average Bike Rentals by Hour") +
+  theme_minimal()
+```
+The plot shows the average number of bike rentals for each hour of the day.
+
+A clear daily pattern is observed. Rental activity is very low during early morning hours (midnight to around 5 AM), indicating minimal demand during the night.
+
+There is a sharp increase in demand starting from early morning, with a noticeable peak around 8 AM. This likely corresponds to commuting hours when people use bikes to travel to work or school.
+
+Demand decreases slightly during midday but rises again in the late afternoon, reaching the highest peak around 5–6 PM. This suggests strong usage during evening commuting hours.
+
+After this peak, rentals gradually decline into the night.
+
+Overall, the data reveals a strong daily cycle with two main peaks, indicating that bike usage is heavily influenced by typical working hours and daily routines.
+
+### Rentals by week 
+
+
+```{r}
+library(lubridate)
+
+data <- data %>%
+  mutate(weekday = wday(as.Date(dteday), label = TRUE))
+
+data %>%
+  group_by(weekday) %>%
+  summarise(avg = mean(count)) %>%
+  ggplot(aes(weekday, avg)) +
+  geom_col(fill = "skyblue") +
+  labs(x = "Day of Week", y = "Average Rentals") +
+  theme_minimal()
+```
+
+The bar chart shows the average number of bike rentals for each day of the week.
+
+Overall, the differences across days are relatively small, indicating that bike usage is fairly consistent throughout the week. However, slightly higher rental activity can be observed during mid-week days, while weekends show a marginal decrease in demand.
+
+This suggests that bike usage is not limited to leisure activities but is also strongly driven by regular daily needs such as commuting. The relatively stable pattern across all days highlights that demand is consistent and predictable over the weekly cycle.
+
+
+### Rental by month
+
+
+```{r}
+data %>%
+  mutate(
+    month = factor(
+      mnth,
+      levels = 1:12,
+      labels = c("Jan","Feb","Mar","Apr","May","Jun",
+                 "Jul","Aug","Sep","Oct","Nov","Dec")
+    )
+  ) %>%
+  group_by(month) %>%
+  summarise(avg = mean(count, na.rm = TRUE)) %>%
+  ggplot(aes(month, avg)) +
+  geom_col(fill = "darkgreen") +
+  labs(
+    title = "Average Bike Rentals by Month",
+    x = "Month",
+    y = "Average Rentals"
+  ) +
+  theme_minimal()
+```
+
+The plot illustrates the average number of bike rentals for each month of the year.
+
+A clear seasonal pattern is observed. Rental activity is lowest during the winter months, particularly in January and February, where demand is significantly reduced. As the months progress into spring, there is a steady increase in bike usage.
+
+The highest demand occurs during the summer months, especially between June and September, where rental activity reaches its peak. This suggests that favorable weather conditions encourage more frequent bike usage.
+
+After the summer peak, demand gradually declines through autumn and reaches lower levels again in winter.
+
+Overall, this pattern indicates strong seasonality in the data, with bike rentals heavily influenced by seasonal and weather-related factors.
+
+---
+
+# Time series 
+
+The bike rental data is structured as a time series, where observations are recorded at regular hourly intervals.
+
+The series consists of 17,379 observations, representing the number of bike rentals over time. A frequency of 24 is used, indicating that the data follows a daily cycle with 24 observations per day (one for each hour).
+
+This structure allows the model to capture repeating patterns within each day, such as peak rental hours and periods of low demand.
+
+By converting the data into a time series format, we enable the use of time series forecasting models such as ARIMA, which rely on temporal dependencies and patterns in the data.
+
+```{r,results="hide"}
+ts_data <- ts(data$count, frequency = 24)
+ts_data
+```
+
+
+## plot
+
+```{r}
+plot(ts_data, ,col="brown", main = "Hourly Bike Rentals Time Series")
+```
+
+## decomposition
+```{r}
+decomp <- decompose(ts_data)
+plot(decomp)
+```
+
+The decomposition of the time series reveals several important patterns.
+
+The observed component shows the overall behavior of bike rentals over time, combining all underlying effects.
+
+The trend component indicates a general upward movement in bike rentals over time, followed by periods of stabilization and slight decline. This suggests that bike usage increased over the observed period, possibly due to growing adoption or seasonal influences.
+
+The seasonal component highlights strong and consistent repeating patterns within the data. Given the hourly frequency, this reflects daily cycles in bike usage, such as peak demand during commuting hours and lower activity during the night.
+
+The random component captures irregular fluctuations that are not explained by trend or seasonality. These variations may be caused by unexpected factors such as weather changes or special events.
+
+Overall, the decomposition confirms that the time series exhibits both trend and strong seasonality, making it well-suited for time series forecasting models.
+
+
+## stacionarity test
+
+```{r}
+library(tseries)
+adf.test(ts_data)
+```
+To verify whether the time series is stationary, the Augmented Dickey-Fuller (ADF) test is applied.
+
+The null hypothesis of the ADF test states that the time series is non-stationary. In this case, the p-value is very small (p-value < 0.01), which leads to the rejection of the null hypothesis.
+
+This indicates that the time series is stationary, meaning its statistical properties such as mean and variance remain constant over time.
+
+Stationarity is an important requirement for many time series models, including ARIMA, as it ensures reliable and consistent forecasting results.
+
+Although the ADF test suggests stationarity, the presence of trend and seasonality observed earlier indicates that transformations such as differencing may still be required for modeling purposes.
+
+## acf pacf
+```{r}
+acf(ts_data, main = "ACF - Bike Rentals")
+pacf(ts_data, main = "PACF - Bike Rentals")
+```
+
+The Autocorrelation Function (ACF) and Partial Autocorrelation Function (PACF) plots are used to identify the underlying structure of the time series and help determine appropriate parameters for ARIMA models.
+
+From the ACF plot, we observe a gradual decay in autocorrelations, which suggests the presence of a moving average (MA) component and possible seasonality in the data.
+
+The PACF plot shows significant spikes at the first few lags, followed by a sharp drop, indicating the presence of an autoregressive (AR) component.
+
+Additionally, noticeable patterns at higher lags suggest seasonal behavior, which aligns with the hourly nature of the dataset (daily cycles).
+
+Overall, the ACF and PACF plots indicate that the time series contains both AR and MA components, supporting the use of ARIMA-type models for forecasting.4
+
+
+## variace stability 
+
+```{r}
+plot(log(ts_data))
+```
+
+To assess the stability of variance in the time series, a logarithmic transformation was applied to the data.
+
+The log-transformed series appears to have a more consistent spread over time compared to the original series, indicating that variance is more stable.
+
+This transformation helps reduce the impact of extreme values and makes the series more suitable for time series modeling techniques such as ARIMA, which assume constant variance.
+
+---
+
+# Train/test split
+
+To evaluate the performance of the forecasting models, the time series was divided into training and testing sets. 
+
+The first 80% of the observations were used to train the model, while the remaining 20% were used for testing. This split preserves the temporal order of the data, ensuring that future values are predicted using only past information.
+
+This setup provides a realistic framework for validating forecasting accuracy.
+
+```{r}
+n <- length(ts_data)
+train_size <- floor(0.8 * n)
+
+train <- ts(ts_data[1:train_size], frequency = 24)
+
+test <- ts(
+  ts_data[(train_size + 1):n],
+  start = time(ts_data)[train_size + 1],
+  frequency = 24
+)
+
+length(train)
+length(test)
+start(train); end(train)
+start(test); end(test)
+```
+
+---
+
+# Modeling
+
+In this section, several time series forecasting models are applied and compared, including Simple Exponential Smoothing (SES), Holt’s method, ARIMA, and Seasonal ARIMA (SARIMA).
+
+These models are used to capture different characteristics of the data such as level, trend, and seasonality. Their performance is evaluated using the test dataset to determine the most suitable model for forecasting bike rentals.
+
+## SES
+
+Simple Exponential Smoothing (SES) is a baseline forecasting method designed for time series data with no clear trend or seasonal pattern. 
+
+The model generates forecasts by applying exponentially decreasing weights to past observations, allowing recent data to have a greater influence. SES serves as a benchmark to evaluate the performance of more complex models such as Holt and ARIMA.
+
+```{r,results="hide"}
+library(forecast)
+
+fit_ses <- ses(train, h = length(test))
+fit_ses
+```
+
+### Accuracy,residuals
+```{r}
+accuracy(fit_ses, test)
+checkresiduals(fit_ses)
+```
+
+The accuracy metrics indicate that the SES model performs poorly on the test data. 
+
+The high values of RMSE and MAE suggest large forecasting errors, while the extremely high MAPE indicates that the model fails to capture the variability in bike rental demand.
+
+This is expected, as SES does not account for trend or seasonal patterns present in the data.
+
+The residual diagnostics reveal that the model assumptions are not fully satisfied. 
+
+The Ljung-Box test yields a very small p-value (p < 0.05), indicating that residuals are not independent and still contain autocorrelation. 
+
+This suggests that the SES model does not adequately capture the underlying structure of the time series.
+
+Overall, the SES model is not suitable for this dataset and serves only as a baseline for comparison with more advanced models.
+
+### Plot
+```{r}
+autoplot(train, series = "Train", color = "black") +
+  autolayer(fitted(fit_ses), series = "Fitted (SES)", color = "blue") +
+  autolayer(test, series = "Real (Test)", color = "darkgreen") +
+  autolayer(fit_ses$mean, series = "Forecast (SES)", color = "red") +
+  labs(
+    title = "SES – Fit and Forecast",
+    x = "Time",
+    y = "Bike Rentals"
+  ) +
+  guides(colour = guide_legend(title = "Series")) +
+  theme_minimal()
+```
+
+The SES model fit and forecast illustrate its main limitation. The model produces a nearly constant forecast, represented by a flat line, which fails to capture the strong variability and fluctuations in the actual bike rental data.
+
+In both the full and zoomed views, it is evident that the forecast does not follow the peaks and troughs of the observed series. This indicates that SES is unable to model the underlying dynamics, such as trend and seasonality, present in the data.
+
+The comparison between forecasted and actual values further highlights this issue, as the predictions remain stable while the real observations vary significantly over time. This results in large forecasting errors and confirms that SES is not suitable for this dataset.
+
+
+
+### Zoomed plot
+```{r}
+last_n <- 300
+
+train_tail <- window(train, start = time(train)[length(train) - last_n + 1])
+fitted_tail <- window(fitted(fit_ses), start = time(train)[length(train) - last_n + 1])
+
+autoplot(train_tail, series = "Train", color = "black") +
+  autolayer(fitted_tail, series = "Fitted (SES)", color = "blue") +
+  autolayer(test, series = "Test", color = "darkgreen") +
+  autolayer(fit_ses$mean, series = "Forecast (SES)", color = "red") +
+  labs(
+    title = "SES – Fit and Forecast (Zoomed View)",
+    x = "Time",
+    y = "Bike Rentals"
+  ) +
+  guides(colour = guide_legend(title = "Series")) +
+  theme_minimal()
+```
+
+
+To better analyze model performance, a zoomed-in view of the most recent observations is presented.”
+
+
+
+### Test vs Forecast
+```{r}
+autoplot(test, series = "Test", color = "darkgreen") +
+  autolayer(fit_ses$mean, series = "Forecast (SES)", color = "red") +
+  labs(
+    title = "SES Forecast vs Test",
+    x = "Time",
+    y = "Bike Rentals"
+  ) +
+  guides(colour = guide_legend(title = "Series")) +
+  theme_minimal()
+```
+The comparison between forecasted values and actual observations provides a clearer assessment of model accuracy.
+
+
+## Holt
+
+Holt’s method extends Simple Exponential Smoothing by incorporating a trend component. This allows the model to better capture changes in the level of the series over time, making it more suitable for data that exhibits a trend.
+
+```{r,results="hide"}
+fit_holt <- holt(train, h = length(test),lambda=0)
+fit_holt
+```
+
+### Accuracy,residuals
+
+```{r}
+accuracy(fit_holt,test)
+checkresiduals(fit_holt)
+```
+The accuracy metrics show that Holt’s method slightly improves the model’s ability to capture the structure of the data compared to SES. However, the forecasting errors on the test set remain relatively high, indicating that the model still struggles to fully represent the variability in bike rentals.
+
+In particular, the high values of RMSE and MAPE suggest that the model does not accurately predict extreme fluctuations in demand.
+
+The residual diagnostics indicate that the model is not fully adequate. Although the residuals are roughly centered around zero, the ACF plot reveals significant autocorrelation, suggesting that important temporal patterns remain unmodeled.
+
+Additionally, the Ljung-Box test yields a very small p-value, leading to rejection of the null hypothesis of independence. This confirms that the residuals are not white noise and that the model fails to capture all the underlying structure in the data.
+
+### plot
+
+```{r}
+library(forecast)
+autoplot(train, series = "Train", color = "black") +
+  autolayer(fitted(fit_holt), series = "Fitted (Holt)", color = "blue") +
+  autolayer(test, series = "Real (Test)", color = "darkgreen") +
+  autolayer(fit_holt$mean, series = "Forecast (Holt)", color = "red") +
+  labs(
+    title = "Holt – Fit and Forecast",
+    x = "Time",
+    y = "Bike Rentals"
+  ) +
+  guides(colour = guide_legend(title = "Series")) +
+  theme_minimal()
+```
+The Holt model introduces a trend component, which results in a slightly increasing forecast over time, as shown by the upward-sloping red line. This represents an improvement over the flat forecast produced by SES.
+
+However, the model still fails to capture the strong variability and fluctuations present in the actual data. The forecast remains smooth and does not follow the rapid changes in bike rentals.
+
+
+```{r}
+last_n <- 300
+
+train_tail <- window(train, start = time(train)[length(train) - last_n + 1])
+fitted_tail <- window(fitted(fit_holt), start = time(train)[length(train) - last_n + 1])
+
+autoplot(train_tail, series = "Train", color = "black") +
+  autolayer(fitted_tail, series = "Fitted (Holt)", color = "blue") +
+  autolayer(test, series = "Test", color = "darkgreen") +
+  autolayer(fit_holt$mean, series = "Forecast (Holt)", color = "red") +
+  labs(
+    title = "Holt – Fit and Forecast (Zoomed View)",
+    x = "Time",
+    y = "Bike Rentals"
+  ) +
+  guides(colour = guide_legend(title = "Series")) +
+  theme_minimal()
+```
+
+####  Clean comparison
+```{r}
+autoplot(test, series = "Test", color = "darkgreen") +
+  autolayer(fit_holt$mean, series = "Forecast (Holt)", color = "red") +
+  labs(
+    title = "Holt Forecast vs Test",
+    x = "Time",
+    y = "Bike Rentals"
+  ) +
+  guides(colour = guide_legend(title = "Series")) +
+  theme_minimal()
+```
+The comparison between the Holt forecast and the test data highlights the model’s limitations. While the forecast captures a general upward trend, it does not align with the high-frequency variations observed in the actual series.
+
+The predicted values are consistently smoother and underestimate the peaks and overestimate the troughs. This results in noticeable forecasting errors, particularly during periods of high variability.
+
+## Holt-winters(additive)
+
+The Holt-Winters additive model extends Holt’s method by incorporating a seasonal component in addition to level and trend. This is particularly appropriate for the bike rental data, which exhibits clear and repeating seasonal patterns.
+
+Compared to SES and Holt, the forecasts now better reflect the fluctuations observed in the data. The model is able to capture both the overall trend and the recurring seasonal behavior, resulting in a more realistic representation of the series.
+
+```{r,results="hide"}
+fit_hw <- hw(train, seasonal = "additive", h = length(test))
+fit_hw
+```
+
+### Accuracy,residuals
+
+
+```{r}
+accuracy(fit_hw,test)
+checkresiduals(fit_hw)
+```
+The accuracy metrics indicate an improvement over the previous models, with lower error values compared to SES and Holt. However, the forecast errors remain relatively large, suggesting that while the model captures the general structure, it still struggles with the high variability present in the data.
+
+The residual diagnostics show that the residuals are more centered around zero compared to previous models, indicating a better fit. However, the Ljung-Box test remains significant (p-value < 0.05), suggesting that some autocorrelation is still present in the residuals.
+
+Additionally, the ACF plot of residuals shows remaining structure, meaning the model has not fully captured all temporal dependencies in the data.
+
+### Plot
+
+
+```{r}
+last_n <- 300
+
+train_tail <- window(train, start = time(train)[length(train) - last_n + 1])
+fitted_tail <- window(fitted(fit_hw), start = time(train)[length(train) - last_n + 1])
+
+autoplot(train_tail, series = "Train", color = "black") +
+  autolayer(fitted_tail, series = "Fitted (HW Additive)", color = "blue") +
+  autolayer(test, series = "Test", color = "darkgreen") +
+  autolayer(fit_hw$mean, series = "Forecast (HW Additive)", color = "red") +
+  labs(title = "Holt-Winters Additive – Fit and Forecast") +
+  theme_minimal()
+```
+To improve interpretability, a zoomed-in view of the last observations is presented. 
+
+Due to the high frequency of the data (hourly) and the strong seasonal fluctuations, the full forecast visualization appears dense and cluttered. Even in the zoomed view, the large variability and rapid changes in bike rentals make it difficult to visually assess the fit.
+
+However, the Holt-Winters model captures the overall level and seasonal pattern of the series. The forecast follows the general structure of the data, although it smooths out short-term fluctuations and extreme peaks.
+
+This highlights a key limitation of smoothing-based models: while they effectively model trend and seasonality, they tend to underrepresent high-frequency variability present in the data.
+
+```{r}
+autoplot(test, series = "Test", color = "darkgreen") +
+  autolayer(fit_hw$mean, series = "Forecast (HW Additive)", color = "red") +
+  labs(
+    title = "Holt-Winters Additive Forecast vs Test",
+    x = "Time",
+    y = "Bike Rentals"
+  ) +
+  guides(colour = guide_legend(title = "Series")) +
+  theme_minimal()
+```
+
+The comparison between the Holt-Winters forecasts and the actual test data highlights the model’s ability to capture the overall level and seasonal structure of the series.
+
+The forecast follows the general range of the observations, indicating that the model successfully incorporates both trend and seasonality. However, it fails to capture the high variability and sharp fluctuations present in the data.
+
+In particular, the forecasts appear overly smooth compared to the actual observations, consistently underestimating peak values and overestimating low values. This suggests that while Holt-Winters is suitable for modeling structured components, it struggles with the high-frequency volatility of the series.
+
+
+
+## Holt-winters(multiplicative)
+
+
+The Holt-Winters multiplicative model was also tested to account for potential proportional seasonal effects.
+
+However, the results indicate that this specification is not appropriate for the data. The accuracy metrics are extremely large, suggesting very poor forecasting performance. In particular, the magnitude of the errors in the test set indicates that the model fails to produce reliable forecasts.
+
+Additionally, the prediction intervals contain unrealistic values (including negative bounds), which is not meaningful for bike rental counts and further highlights model misspecification.
+
+```{r,results="hide"}
+fit_hw_mul <- hw(train, seasonal = "multiplicative", h = length(test))
+fit_hw_mul
+```
+
+
+### Accuracy,residuals 
+```{r}
+accuracy(fit_hw_mul, test)
+checkresiduals(fit_hw_mul)
+```
+
+Compared to the additive version, the multiplicative model shows a dramatic deterioration in performance. The very high RMSE, MAE, and MAPE values indicate that the model is unstable and unable to capture the underlying data structure.
+
+The residual diagnostics confirm the poor fit of the model. The residuals exhibit extreme variability and are not centered around zero. The presence of large spikes and heavy skewness indicates that the model fails to adequately capture both the level and seasonal structure.
+
+Furthermore, the Ljung-Box test remains significant, indicating that autocorrelation is still present in the residuals.
+
+
+### Plot. 
+
+```{r}
+last_n <- 300
+
+train_tail <- window(train, start = time(train)[length(train) - last_n + 1])
+fitted_tail <- window(fitted(fit_hw_mul), start = time(train)[length(train) - last_n + 1])
+
+autoplot(train_tail, series = "Train", color = "black") +
+  autolayer(fitted_tail, series = "Fitted (HW Multiplicative)", color = "blue") +
+  autolayer(test, series = "Test", color = "darkgreen") +
+  autolayer(fit_hw_mul$mean, series = "Forecast (HW Multiplicative) ", color = "red") +
+  labs(title = "Holt-Winters mul – Fit and Forecast") +
+  theme_minimal()
+```
+
+The Holt-Winters multiplicative model produces highly unstable forecasts, as clearly shown in the forecast vs test plot. The predicted values increase explosively over time, reaching unrealistic magnitudes that are far beyond the scale of the observed data.
+
+This behavior indicates that the multiplicative formulation is not suitable for this dataset. Since the model assumes that seasonal effects scale proportionally with the level, it can lead to exponential growth when this assumption does not hold.
+
+As a result, the forecasts become numerically unstable and lose all practical interpretability.
+
+
+```{r}
+autoplot(test, series = "Test", color = "darkgreen") +
+  autolayer(fit_hw_mul$mean, series = "Forecast (HW Mul)", color = "red") +
+  labs(title = "Holt-Winters Multiplicative Forecast vs Test") +
+  theme_minimal()
+```
+
+## Arima 
+
+ARIMA (AutoRegressive Integrated Moving Average) is a widely used time series model that captures temporal dependencies in the data through autoregressive (AR) and moving average (MA) components, while differencing (I) is used to achieve stationarity.
+
+In this analysis, the `auto.arima()` function is used to automatically select the optimal model parameters based on the training data. The fitted model is then used to generate forecasts, which are evaluated against the test set.
+
+```{r}
+library(forecast)
+fit_arima <- auto.arima(
+  train,
+  stepwise = TRUE,
+  approximation = TRUE
+)
+forecast_arima <- forecast(fit_arima, h = length(test))
+summary(fit_arima)
+```
+The `auto.arima()` function selected an ARIMA(5,0,1)(2,1,0)[24] model. This indicates that the model includes both non-seasonal and seasonal components.
+
+The non-seasonal part consists of 5 autoregressive terms and 1 moving average term, while the seasonal component includes 2 seasonal autoregressive terms with a seasonal differencing of order 1 and a period of 24, reflecting the hourly seasonality in the data.
+
+The inclusion of seasonal differencing and seasonal autoregressive terms suggests the presence of strong daily patterns in bike rentals, which is consistent with expected hourly usage behavior.
+
+Most of the estimated coefficients are statistically significant (based on their relatively small standard errors), indicating that both short-term and seasonal dependencies are important in explaining the variation in the series.
+
+The training error metrics show relatively low RMSE and MAE values compared to previous models, suggesting that the ARIMA model provides a good fit to the training data.
+
+Additionally, the residual autocorrelation (ACF1 ≈ 0) indicates that the model has successfully captured most of the temporal dependence in the data.
+
+
+### Accuracy
+```{r}
+accuracy(forecast_arima, test)
+```
+
+The ARIMA model performs reasonably well on the training data, with relatively low RMSE and MAE values. However, its performance deteriorates significantly on the test set.
+
+The test error metrics are substantially higher, particularly the MAPE and RMSE, indicating poor forecasting accuracy. Additionally, the MASE value greater than 1 suggests that the model performs worse than a simple naive benchmark.
+
+The high autocorrelation in the residuals (ACF1 ≈ 0.84) further indicates that the model fails to fully capture the underlying structure of the data, leaving significant temporal patterns unexplained.
+
+Overall, despite its strong performance on the training set, the ARIMA model does not generalize well to unseen data and therefore is not the most suitable model for this dataset.
+
+
+### Plot
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+plot_df <- data.frame(
+  datetime = data$datetime[(train_size + 1):n],
+  test = as.numeric(test),
+  forecast_arima = as.numeric(forecast_arima$mean)
+)
+
+daily_plot <- plot_df %>%
+  mutate(date = as.Date(datetime)) %>%
+  group_by(date) %>%
+  summarise(
+    test = mean(test),
+    forecast_arima = mean(forecast_arima)
+  )
+
+ggplot(daily_plot, aes(x = date)) +
+  geom_line(aes(y = test, color = "Test")) +
+  geom_line(aes(y = forecast_arima, color = "Forecast (ARIMA)")) +
+  labs(
+    title = "ARIMA Forecast vs Test (Daily Average)",
+    x = "Date",
+    y = "Average Bike Rentals",
+    color = "Series"
+  ) +
+  theme_minimal()
+```
+
+The ARIMA forecast plotted against the test data (using daily averages) shows that the model produces nearly constant predictions over time. While this improves visual clarity compared to the hourly data, it reveals a key limitation of the model.
+
+The forecast fails to capture the variability and downward trend present in the actual observations. Instead, it converges toward a stable mean value, resulting in systematic deviations from the true data.
+
+This indicates that the ARIMA model is unable to adequately model the underlying dynamics of the series, leading to poor predictive performance.
+
+
+## Sarima
+
+Seasonal ARIMA (SARIMA) extends the ARIMA model by incorporating seasonal patterns in the data. While ARIMA captures short-term dependencies and trends, SARIMA additionally models repeating seasonal effects, making it more suitable for time series with periodic behavior such as daily or weekly cycles in bike rentals.
+
+In this case, SARIMA is applied to account for the strong seasonality observed in the dataset, which is not adequately captured by the standard ARIMA model.
+
+
+```{r}
+library(forecast)
+
+model_sarima <- auto.arima(train, seasonal = TRUE)
+
+forecast_sarima <- forecast(model_sarima, h = length(test))
+
+accuracy(forecast_sarima, test)
+summary(model_sarima)
+```
+
+The SARIMA model selected by auto.arima is ARIMA(5,0,1)(2,1,0)[24], indicating the presence of both non-seasonal and seasonal components with a seasonal period of 24.
+
+From the training set, the model shows reasonable performance with relatively low RMSE (60.97) and MAE (39.06), suggesting a good fit to the training data.
+
+However, performance on the test set is considerably worse. The RMSE increases to 231.46 and MAE to 167.07, indicating a significant drop in forecasting accuracy. The MAPE is also very high (572.35), showing that the model struggles to predict unseen data.
+
+Additionally, the ACF1 value of 0.84 for the test set suggests strong autocorrelation remaining in the residuals, meaning the model has not fully captured the underlying structure of the time series.
+
+Overall, while SARIMA improves the in-sample fit, it does not generalize well to the test data, indicating potential overfitting or difficulty in capturing the variability in the series.
+
+---
+
+# Evaluation
+
+In this section, the forecasting performance of each model is evaluated using standard accuracy metrics, including RMSE, MAE, MAPE, and MASE. These metrics are computed on the test dataset to assess how well each model generalizes to unseen data.
+
+The results are organized into a summary table, allowing for a clear and consistent comparison across models. RMSE and MAE measure the magnitude of forecast errors, while MAPE provides a relative measure of error in percentage terms. MASE is included as a scale-independent metric that facilitates comparison across models.
+
+This evaluation framework provides the basis for comparing model performance in the subsequent section.
+
+
+## Accuracy table
+```{r}
+library(dplyr)
+
+acc_table <- bind_rows(
+  data.frame(Model = "SES", accuracy(fit_ses, test)),
+  data.frame(Model = "Holt", accuracy(fit_holt, test)),
+  data.frame(Model = "HW Add", accuracy(fit_hw, test)),
+  data.frame(Model = "HW Mul", accuracy(fit_hw_mul, test)),
+  data.frame(Model = "ARIMA", accuracy(forecast_arima, test)),
+  data.frame(Model = "SARIMA", accuracy(forecast_sarima, test))
+)
+
+acc_table <- acc_table %>%
+  select(Model, RMSE, MAE, MAPE, MASE) %>%
+  arrange(RMSE)
+
+acc_table
+```
+
+The models were compared based on their forecasting accuracy on the test dataset using RMSE, MAE, MAPE, and MASE.
+
+Among all models, the Holt-Winters additive model achieved the lowest RMSE, indicating the best overall forecasting performance. Simple models such as SES and Holt also performed competitively, with only slightly higher error values. In contrast, ARIMA and SARIMA models did not provide significant improvements, producing higher errors despite their increased complexity.
+
+The Holt-Winters multiplicative model performed extremely poorly, with very large error values, indicating instability and making it unsuitable for this dataset.
+
+Overall, the results suggest that simpler models perform as well as, or better than, more complex models for this time series. This is likely due to the high variability and irregular fluctuations in the data, which are difficult for more structured models such as ARIMA and SARIMA to capture effectively.
+
+
+
+## Plot
+
+```{r}
+ggplot(acc_table, aes(x = reorder(Model, RMSE), y = RMSE, fill = Model)) +
+  geom_col() +
+  coord_flip() +
+  scale_y_log10() +
+  labs(title = "Model Comparison (RMSE, log scale)", x = "Model", y = "RMSE (log)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+The RMSE comparison plot highlights a substantial difference in performance across models. The Holt-Winters multiplicative model appears as an extreme outlier, with error values far exceeding those of all other models. For this reason, a logarithmic scale is used to improve visualization and allow meaningful comparison across the full set of models.
+
+Among the remaining models, the Holt-Winters additive model achieves the lowest RMSE, indicating the best overall predictive performance. The other models show relatively similar error levels, suggesting that while some approaches perform slightly better, forecasting this series remains challenging due to its high variability.
+
+## Best model
+
+```{r}
+best_model <- acc_table %>%
+  filter(grepl("Test", rownames(acc_table))) %>%
+  arrange(RMSE) %>%
+  slice(1) %>%
+  pull(Model)
+best_model
+```
+
+Based on the evaluation of forecasting accuracy on the test dataset, the Holt-Winters additive model (HW Add) achieved the lowest RMSE. Therefore, it is selected as the best-performing model and will be used for the final forecast.
+
+---
+
+# Machine Learning Extension: XGBoost Forecasting
+
+In addition to classical time series models, a machine learning approach was also explored using XGBoost. Unlike ARIMA and SARIMA, XGBoost can incorporate lagged demand values together with external variables such as temperature, humidity, windspeed, and weather conditions. This makes it suitable for capturing nonlinear relationships in bike rental demand.
+
+
+## Preparing the data
+
+To apply XGBoost, the time series data was transformed into a supervised learning format. Lagged variables and rolling statistics were created so that past observations could be used as predictors of future bike demand.
+
+```{r}
+library(dplyr)
+library(slider)
+
+data_ml <- data %>%
+  arrange(datetime) %>%
+  select(-count, -casual, -registered, -instant) %>%
+  mutate(
+    lag_1 = lag(cnt, 1),
+    lag_2 = lag(cnt, 2),
+    lag_24 = lag(cnt, 24),
+    lag_168 = lag(cnt, 168),
+    roll_mean_24 = slide_dbl(cnt, mean, .before = 23, .complete = TRUE),
+    roll_sd_24 = slide_dbl(cnt, sd, .before = 23, .complete = TRUE)
+  ) %>%
+  na.omit()
+```
+
+Several lag features were included in the dataset. The variables lag_1 and lag_2 represent the bike demand in the previous one and two hours, while lag_24 captures demand at the same hour on the previous day, and lag_168 captures demand at the same hour in the previous week. In addition, rolling statistics were calculated to summarize recent short-term demand behavior.
+
+```{r}
+str(data_ml)
+```
+
+## Train/test split
+```{r}
+n <- nrow(data_ml)
+train_size <- floor(0.8 * n)
+
+train <- data_ml[1:train_size, ]
+test  <- data_ml[(train_size + 1):n, ]
+```
+
+
+## Preparing the data for XGBoost
+
+XGBoost requires numeric input data in matrix form. Therefore, the predictor variables were converted into model matrices, while the target variable remained the hourly bike rental count (cnt).
+
+```{r}
+library(xgboost)
+
+train_matrix <- model.matrix(
+  cnt ~ . - datetime - dteday,
+  data = train
+)[, -1]
+
+test_matrix <- model.matrix(
+  cnt ~ . - datetime - dteday,
+  data = test
+)[, -1]
+
+dtrain <- xgb.DMatrix(data = train_matrix, label = train$cnt)
+dtest  <- xgb.DMatrix(data = test_matrix, label = test$cnt)
+```
+
+### Training the XGBoost model
+An XGBoost regression model was trained to predict bike rental demand. The objective function used was squared error, which is appropriate for continuous target values.
+
+```{r}
+xgb_model <- xgboost(
+  x = train_matrix,
+  y = train$cnt,
+  nrounds = 200,
+  objective = "reg:squarederror",
+  learning_rate = 0.1,
+  max_depth = 6,
+  subsample = 0.8,
+  colsample_bytree = 0.8
+)
+```
+
+
+## Generating predictions
+
+```{r}
+xgb_pred <- predict(xgb_model, newdata = test_matrix)
+```
+
+## Evaluation
+
+Model performance was evaluated using Root Mean Squared Error (RMSE) and Mean Absolute Error (MAE), which measure average prediction error in different ways.
+
+```{r}
+rmse_xgb <- sqrt(mean((test$cnt - xgb_pred)^2))
+mae_xgb  <- mean(abs(test$cnt - xgb_pred))
+
+rmse_xgb
+mae_xgb
+```
+
+
+## Plot actual vs predicted values
+
+```{r}
+library(ggplot2)
+
+xgb_results <- data.frame(
+  datetime = test$datetime,
+  actual = test$cnt,
+  predicted = xgb_pred
+)
+
+ggplot(xgb_results, aes(x = datetime)) +
+  geom_line(aes(y = actual, color = "Actual")) +
+  geom_line(aes(y = predicted, color = "Predicted")) +
+  labs(
+    title = "XGBoost: Actual vs Predicted Bike Demand",
+    x = "Time",
+    y = "Bike Count",
+    color = "Legend"
+  ) +
+  theme_minimal()
+```
+
+While the XGBoost model captures general demand patterns, the predictions appear noisy and deviate from actual values during several periods. This suggests that the model may be overfitting to short-term fluctuations or not fully capturing the underlying temporal structure compared to classical time series approaches.
+
+
+## XGBoost vs SARIMA
+
+```{r}
+library(forecast)
+sarima_acc <- accuracy(forecast_sarima, test$cnt)
+
+rmse_sarima <- sarima_acc[2, "RMSE"]
+mae_sarima  <- sarima_acc[2, "MAE"]
+
+comparison <- data.frame(
+  Model = c("SARIMA", "XGBoost"),
+  RMSE = c(rmse_sarima, rmse_xgb),
+  MAE  = c(mae_sarima, mae_xgb)
+)
+
+comparison
+```
+
+The comparison between SARIMA and XGBoost shows that the machine learning approach achieved substantially better predictive performance on the bike sharing dataset. XGBoost produced a much lower RMSE (46.73) and MAE (29.84) compared to SARIMA, which recorded an RMSE of 304.46 and an MAE of 237.32. These results suggest that XGBoost was more effective at capturing the complex relationships in bike rental demand, particularly by using lagged values together with external variables such as temperature, humidity, windspeed, and weather conditions.
+
+
+# Conclusion
+
+The analysis highlights several key patterns in bike rental demand. The data exhibits strong seasonal and periodic behavior, with consistent fluctuations across time that are effectively captured by classical time series models such as Holt-Winters and SARIMA.
+
+However, the results show that a machine learning approach can significantly improve forecasting performance when additional explanatory variables are available. In particular, the XGBoost model achieved substantially lower prediction errors compared to SARIMA, with an RMSE of 46.73 and MAE of 29.84, indicating a much closer fit to the observed data.
+
+This improvement suggests that incorporating lagged demand values together with external variables such as temperature, humidity, windspeed, and weather conditions allows XGBoost to better capture complex and nonlinear relationships in the data. While classical models effectively represent trend and seasonality, they may be limited in handling these additional interactions.
+
+From a practical perspective, these findings indicate that bike rental demand is influenced not only by temporal patterns but also by external factors, making machine learning models particularly useful for accurate short-term forecasting and operational planning.
+
+Overall, the comparison demonstrates that while traditional time series models provide a strong baseline, XGBoost offers a more flexible and accurate approach for this dataset, making it the preferred model among those evaluated.
+
+
+
+
+
+
+
+
+
